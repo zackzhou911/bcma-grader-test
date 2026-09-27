@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — Mock Exam</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="sheet">
+    <div class="masthead">
+      <p class="kicker">ADMIN</p>
+      <h1>Manage the mock exam</h1>
+    </div>
+
+    <div class="admin-section">
+      <h2>Header text</h2>
+      <div class="field-row">
+        <label for="kickerInput">SMALL LABEL (above the title)</label>
+        <input type="text" id="kickerInput" placeholder="e.g. MOCK EXAM · UNOFFICIAL">
+      </div>
+      <div class="field-row" style="margin-bottom:0;">
+        <label for="headerInput">MAIN TITLE</label>
+        <input type="text" id="headerInput" placeholder="e.g. AMC 10A — Fall Mock">
+      </div>
+    </div>
+
+    <div class="admin-section">
+      <h2>Problem set (shown at the top of the student page)</h2>
+      <div class="field-row">
+        <label for="materialType">FORMAT</label>
+        <select id="materialType">
+          <option value="none">Nothing posted</option>
+          <option value="text">Plain text</option>
+          <option value="pdf">PDF</option>
+        </select>
+      </div>
+      <div class="field-row" id="materialTextWrap">
+        <label for="materialTextInput">TEXT</label>
+        <textarea id="materialTextInput" placeholder="Paste the problem set text here..."></textarea>
+      </div>
+      <div class="field-row" id="materialPdfWrap" style="display:none;">
+        <label for="materialPdfFile">UPLOAD A PDF (under ~8MB)</label>
+        <input type="file" id="materialPdfFile" accept="application/pdf">
+        <p class="small-note">Or paste a link to a PDF hosted elsewhere instead:</p>
+        <input type="text" id="materialPdfUrlInput" placeholder="https://...">
+      </div>
+    </div>
+
+    <div class="admin-section">
+      <h2>Problems &amp; answer key</h2>
+      <div class="field-row">
+        <label for="numProblemsInput">NUMBER OF PROBLEMS</label>
+        <input type="text" id="numProblemsInput" style="max-width:120px;" value="25">
+      </div>
+      <button type="button" id="applyCountBtn" class="secondary">Apply count</button>
+      <p class="small-note">For each problem below, choose whether it's multiple choice (A–E) or numeric (AIME-style, 000–999), and set the correct answer. Leave an answer blank to leave that problem ungraded for now.</p>
+      <div id="answerKeyGrid" class="answer-key-grid" style="margin-top:18px;"></div>
+    </div>
+
+    <div class="actions">
+      <button type="button" id="saveConfigBtn">Save changes</button>
+      <span id="saveStatus" class="status"></span>
+    </div>
+
+    <div class="admin-section" style="margin-top:48px;">
+      <h2>Submissions</h2>
+      <div class="actions" style="margin-top:0; margin-bottom:16px;">
+        <button type="button" id="refreshSubsBtn" class="secondary">Refresh</button>
+        <button type="button" id="clearSubsBtn" class="danger">Delete all submissions</button>
+      </div>
+      <table class="subs" id="subsTable">
+        <thead>
+          <tr><th>Name</th><th>Score</th><th>Submitted</th><th></th></tr>
+        </thead>
+        <tbody id="subsBody"></tbody>
+      </table>
+      <p class="small-note" id="noSubsNote" style="display:none;">No submissions yet.</p>
+    </div>
+
+    <p class="small-note"><a class="nav-link" href="index.html">&larr; back to exam</a></p>
+  </div>
+
+  <script>
+    const CHOICES_MC = ['A', 'B', 'C', 'D', 'E'];
+    let config = null;
+
+    function defaultConfig() {
+      const n = 25;
+      return {
+        headerText: '[AMC 10 - THIS IS A TEST]',
+        kicker: 'MOCK EXAM · UNOFFICIAL',
+        materialType: 'none',
+        materialText: '',
+        materialPdfUrl: '',
+        numProblems: n,
+        types: Array(n).fill('mc'),
+        answerKey: Array(n).fill('')
+      };
+    }
+
+    function setStatus(msg, kind) {
+      const el = document.getElementById('saveStatus');
+      el.textContent = msg;
+      el.className = 'status ' + (kind || '');
+    }
+
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/config');
+        const data = await res.json();
+        config = data ? Object.assign(defaultConfig(), data) : defaultConfig();
+      } catch (e) {
+        console.error(e);
+        config = defaultConfig();
+        setStatus('Could not reach the server.', 'err');
+      }
+      renderForm();
+    }
+
+    function renderForm() {
+      document.getElementById('kickerInput').value = config.kicker || '';
+      document.getElementById('headerInput').value = config.headerText || '';
+      document.getElementById('materialType').value = config.materialType || 'none';
+      document.getElementById('materialTextInput').value = config.materialText || '';
+      document.getElementById('materialPdfUrlInput').value =
+        (config.materialPdfUrl && !config.materialPdfUrl.startsWith('data:')) ? config.materialPdfUrl : '';
+      document.getElementById('numProblemsInput').value = config.numProblems;
+      updateMaterialVisibility();
+      renderAnswerKeyGrid();
+    }
+
+    function updateMaterialVisibility() {
+      const t = document.getElementById('materialType').value;
+      document.getElementById('materialTextWrap').style.display = t === 'text' ? 'block' : 'none';
+      document.getElementById('materialPdfWrap').style.display = t === 'pdf' ? 'block' : 'none';
+    }
+    document.getElementById('materialType').addEventListener('change', updateMaterialVisibility);
+
+    function renderAnswerKeyGrid() {
+      const grid = document.getElementById('answerKeyGrid');
+      grid.innerHTML = '';
+      for (let i = 0; i < config.numProblems; i++) {
+        const row = document.createElement('div');
+        row.className = 'answer-key-row';
+
+        const label = document.createElement('span');
+        label.textContent = '#' + (i + 1);
+        label.style.minWidth = '24px';
+        row.appendChild(label);
+
+        const typeSelect = document.createElement('select');
+        typeSelect.style.maxWidth = '78px';
+        ['mc', 'num'].forEach(t => {
+          const opt = document.createElement('option');
+          opt.value = t;
+          opt.textContent = t === 'mc' ? 'A–E' : '000–999';
+          typeSelect.appendChild(opt);
+        });
+        typeSelect.value = config.types[i] || 'mc';
+        typeSelect.dataset.role = 'type';
+        typeSelect.dataset.index = i;
+        row.appendChild(typeSelect);
+
+        const answerWrap = document.createElement('div');
+        answerWrap.style.flex = '1';
+        answerWrap.dataset.answerWrap = i;
+        row.appendChild(answerWrap);
+
+        function renderAnswerField() {
+          answerWrap.innerHTML = '';
+          if (typeSelect.value === 'mc') {
+            const sel = document.createElement('select');
+            sel.dataset.role = 'answer';
+            sel.dataset.index = i;
+            const blank = document.createElement('option');
+            blank.value = '';
+            blank.textContent = '—';
+            sel.appendChild(blank);
+            CHOICES_MC.forEach(c => {
+              const opt = document.createElement('option');
+              opt.value = c;
+              opt.textContent = c;
+              sel.appendChild(opt);
+            });
+            sel.value = CHOICES_MC.includes((config.answerKey[i] || '').toUpperCase()) ? config.answerKey[i].toUpperCase() : '';
+            answerWrap.appendChild(sel);
+          } else {
+            const inp = document.createElement('input');
+            inp.type = 'text';
+            inp.maxLength = 3;
+            inp.placeholder = '000';
+            inp.dataset.role = 'answer';
+            inp.dataset.index = i;
+            inp.value = /^[0-9]{1,3}$/.test(config.answerKey[i] || '') ? config.answerKey[i] : '';
+            answerWrap.appendChild(inp);
+          }
+        }
+        typeSelect.addEventListener('change', renderAnswerField);
+        renderAnswerField();
+
+        grid.appendChild(row);
+      }
+    }
+
+    document.getElementById('applyCountBtn').addEventListener('click', () => {
+      let n = parseInt(document.getElementById('numProblemsInput').value, 10);
+      if (!n || n < 1) n = 25;
+      n = Math.min(n, 50);
+      const oldTypes = config.types, oldKey = config.answerKey;
+      config.numProblems = n;
+      config.types = Array(n).fill('mc').map((v, i) => oldTypes[i] || 'mc');
+      config.answerKey = Array(n).fill('').map((v, i) => oldKey[i] || '');
+      renderAnswerKeyGrid();
+    });
+
+    async function fileToDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    document.getElementById('saveConfigBtn').addEventListener('click', async () => {
+      setStatus('Saving…', '');
+      config.kicker = document.getElementById('kickerInput').value.trim();
+      config.headerText = document.getElementById('headerInput').value.trim() || '[AMC 10 - THIS IS A TEST]';
+      config.materialType = document.getElementById('materialType').value;
+      config.materialText = document.getElementById('materialTextInput').value;
+
+      const pdfFile = document.getElementById('materialPdfFile').files[0];
+      const pdfUrl = document.getElementById('materialPdfUrlInput').value.trim();
+      if (config.materialType === 'pdf') {
+        if (pdfFile) {
+          if (pdfFile.size > 8 * 1024 * 1024) {
+            setStatus('That PDF is too large (keep it under ~8MB), or paste a link instead.', 'err');
+            return;
+          }
+          config.materialPdfUrl = await fileToDataUrl(pdfFile);
+        } else if (pdfUrl) {
+          config.materialPdfUrl = pdfUrl;
+        }
+      }
+
+      document.querySelectorAll('#answerKeyGrid [data-role="type"]').forEach(el => {
+        config.types[parseInt(el.dataset.index, 10)] = el.value;
+      });
+      document.querySelectorAll('#answerKeyGrid [data-role="answer"]').forEach(el => {
+        config.answerKey[parseInt(el.dataset.index, 10)] = el.value.trim();
+      });
+
+      try {
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config)
+        });
+        if (!res.ok) throw new Error('Save failed');
+        setStatus('Saved.', 'ok');
+      } catch (e) {
+        console.error(e);
+        setStatus('Could not save — check your connection.', 'err');
+      }
+    });
+
+    function fmtTime(ts) {
+      if (!ts) return '—';
+      return new Date(ts).toLocaleString();
+    }
+
+    async function loadSubmissions() {
+      const body = document.getElementById('subsBody');
+      body.innerHTML = '';
+      try {
+        const res = await fetch('/api/submissions');
+        const items = await res.json();
+        document.getElementById('noSubsNote').style.display = items.length === 0 ? 'block' : 'none';
+        items.forEach(d => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${escapeHtml(d.name || '—')}</td>
+            <td>${d.graded > 0 ? d.score + ' / ' + d.graded : '—'}</td>
+            <td>${fmtTime(d.timestamp)}</td>
+            <td><button type="button" class="secondary expand-btn" data-id="${d.id}">View answers</button></td>
+          `;
+          body.appendChild(tr);
+
+          const expandRow = document.createElement('tr');
+          expandRow.className = 'expand-row';
+          expandRow.style.display = 'none';
+          const td = document.createElement('td');
+          td.colSpan = 4;
+          td.textContent = (d.answers || []).map((a, i) => `#${i + 1}: ${a || '—'}`).join('   ');
+          expandRow.appendChild(td);
+          body.appendChild(expandRow);
+
+          tr.querySelector('.expand-btn').addEventListener('click', () => {
+            expandRow.style.display = expandRow.style.display === 'none' ? 'table-row' : 'none';
+          });
+        });
+      } catch (e) {
+        console.error(e);
+        setStatus('Could not load submissions.', 'err');
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    document.getElementById('refreshSubsBtn').addEventListener('click', loadSubmissions);
+
+    document.getElementById('clearSubsBtn').addEventListener('click', async () => {
+      if (!confirm('Delete ALL submissions? This cannot be undone.')) return;
+      try {
+        const res = await fetch('/api/submissions', { method: 'DELETE' });
+        if (!res.ok) throw new Error('Delete failed');
+        loadSubmissions();
+      } catch (e) {
+        console.error(e);
+        setStatus('Could not delete submissions.', 'err');
+      }
+    });
+
+    loadConfig();
+    loadSubmissions();
+  </script>
+</body>
+</html>

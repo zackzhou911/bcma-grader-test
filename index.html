@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mock Exam</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="sheet">
+    <div class="masthead">
+      <p class="kicker" id="kicker">MOCK EXAM &middot; UNOFFICIAL</p>
+      <h1 id="headerText">[AMC 10 - THIS IS A TEST]</h1>
+    </div>
+
+    <div class="material-box" id="materialBox">
+      <p style="color:#B7AF9B;">No problem set has been posted yet.</p>
+    </div>
+
+    <div class="field-row">
+      <label for="studentName">YOUR NAME</label>
+      <input type="text" id="studentName" placeholder="e.g. Jane Smith">
+    </div>
+
+    <form id="examForm"></form>
+
+    <div class="actions">
+      <button type="button" id="submitBtn">Submit answers</button>
+      <button type="button" id="viewResultsBtn" class="secondary" style="display:none;">View results</button>
+    </div>
+
+    <div id="statusMsg" class="status"></div>
+
+    <div id="resultsBox" class="results-box" style="display:none;">
+      <h2>Your results</h2>
+      <div class="score-line" id="scoreLine"></div>
+      <div class="results-grid" id="resultsGrid"></div>
+    </div>
+
+    <p class="small-note" style="margin-top:48px;"><a class="nav-link" href="admin.html">admin &rarr;</a></p>
+  </div>
+
+  <script>
+    const CHOICES_MC = ['A', 'B', 'C', 'D', 'E'];
+    let currentConfig = null;
+    let lastSubmissionId = localStorage.getItem('amc_last_submission_id') || null;
+
+    function defaultConfig() {
+      const n = 25;
+      return {
+        headerText: '[AMC 10 - THIS IS A TEST]',
+        kicker: 'MOCK EXAM · UNOFFICIAL',
+        materialType: 'none',
+        materialText: '',
+        materialPdfUrl: '',
+        numProblems: n,
+        types: Array(n).fill('mc'),
+        answerKey: Array(n).fill('')
+      };
+    }
+
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/config');
+        const data = await res.json();
+        currentConfig = data ? Object.assign(defaultConfig(), data) : defaultConfig();
+      } catch (e) {
+        console.error(e);
+        currentConfig = defaultConfig();
+        showStatus('Could not reach the server. Showing a local preview only.', 'err');
+      }
+      renderConfig();
+    }
+
+    function renderConfig() {
+      document.getElementById('kicker').textContent = currentConfig.kicker || 'MOCK EXAM · UNOFFICIAL';
+      document.getElementById('headerText').textContent = currentConfig.headerText;
+
+      const box = document.getElementById('materialBox');
+      box.innerHTML = '';
+      if (currentConfig.materialType === 'text' && currentConfig.materialText) {
+        const p = document.createElement('p');
+        p.textContent = currentConfig.materialText;
+        box.appendChild(p);
+      } else if (currentConfig.materialType === 'pdf' && currentConfig.materialPdfUrl) {
+        const embed = document.createElement('embed');
+        embed.src = currentConfig.materialPdfUrl;
+        embed.type = 'application/pdf';
+        box.appendChild(embed);
+      } else {
+        box.innerHTML = '<p style="color:#B7AF9B;">No problem set has been posted yet.</p>';
+      }
+
+      const form = document.getElementById('examForm');
+      form.innerHTML = '';
+      for (let i = 0; i < currentConfig.numProblems; i++) {
+        const type = currentConfig.types[i] || 'mc';
+        const row = document.createElement('div');
+        row.className = 'problem';
+
+        const num = document.createElement('div');
+        num.className = 'num';
+        num.textContent = (i + 1) + '.';
+        row.appendChild(num);
+
+        if (type === 'num') {
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.className = 'numeric';
+          input.placeholder = '000–999';
+          input.maxLength = 3;
+          input.inputMode = 'numeric';
+          input.dataset.index = i;
+          row.appendChild(input);
+        } else {
+          const select = document.createElement('select');
+          select.dataset.index = i;
+          const blank = document.createElement('option');
+          blank.value = '';
+          blank.textContent = '— choose —';
+          select.appendChild(blank);
+          CHOICES_MC.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c;
+            opt.textContent = c;
+            select.appendChild(opt);
+          });
+          row.appendChild(select);
+        }
+        form.appendChild(row);
+      }
+    }
+
+    function collectAnswers() {
+      const answers = Array(currentConfig.numProblems).fill('');
+      document.querySelectorAll('#examForm [data-index]').forEach(el => {
+        answers[parseInt(el.dataset.index, 10)] = el.value.trim();
+      });
+      return answers;
+    }
+
+    function showStatus(msg, kind) {
+      const el = document.getElementById('statusMsg');
+      el.textContent = msg;
+      el.className = 'status ' + (kind || '');
+    }
+
+    function gradeAnswers(answers) {
+      const key = currentConfig.answerKey || [];
+      let score = 0, graded = 0;
+      const detail = answers.map((a, i) => {
+        const correct = (key[i] || '').trim();
+        if (!correct) return { state: 'ungraded', given: a };
+        graded++;
+        if (!a) return { state: 'blank', given: a };
+        if (a.toUpperCase() === correct.toUpperCase()) { score++; return { state: 'correct', given: a }; }
+        return { state: 'incorrect', given: a };
+      });
+      return { score, graded, detail };
+    }
+
+    document.getElementById('submitBtn').addEventListener('click', async () => {
+      const name = document.getElementById('studentName').value.trim();
+      if (!name) { showStatus('Enter your name before submitting.', 'err'); return; }
+      const answers = collectAnswers();
+      const { score, graded } = gradeAnswers(answers);
+
+      showStatus('Submitting…', '');
+      try {
+        const res = await fetch('/api/submissions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, answers, numProblems: currentConfig.numProblems, score, graded })
+        });
+        if (!res.ok) throw new Error('Submit failed');
+        const { id } = await res.json();
+        lastSubmissionId = id;
+        localStorage.setItem('amc_last_submission_id', id);
+        showStatus('Submitted. Click "View results" to see your score.', 'ok');
+        document.getElementById('viewResultsBtn').style.display = 'inline-block';
+      } catch (e) {
+        console.error(e);
+        showStatus('Submission failed — check your connection.', 'err');
+      }
+    });
+
+    document.getElementById('viewResultsBtn').addEventListener('click', async () => {
+      if (!lastSubmissionId) return;
+      try {
+        const res = await fetch('/api/submissions?id=' + encodeURIComponent(lastSubmissionId));
+        const data = await res.json();
+        if (!data) { showStatus('Could not find your submission.', 'err'); return; }
+        const { score, graded, detail } = gradeAnswers(data.answers);
+        document.getElementById('resultsBox').style.display = 'block';
+        document.getElementById('scoreLine').textContent =
+          graded > 0 ? `Score: ${score} / ${graded} graded problems` : 'No answer key has been posted yet — your answers are saved and will be graded once one is.';
+        const grid = document.getElementById('resultsGrid');
+        grid.innerHTML = '';
+        detail.forEach((d, i) => {
+          const cell = document.createElement('div');
+          cell.className = 'result-cell ' + d.state;
+          cell.textContent = `#${i + 1}: ${d.given || '—'}`;
+          grid.appendChild(cell);
+        });
+      } catch (e) {
+        console.error(e);
+        showStatus('Could not load results.', 'err');
+      }
+    });
+
+    loadConfig();
+  </script>
+</body>
+</html>
